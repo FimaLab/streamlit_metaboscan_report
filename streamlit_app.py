@@ -25,7 +25,7 @@ def time_function(func):
 # Import your utility functions (assuming they exist)
 from ui_kit.streamlit_utilit import *
 
-DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/"
+DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/:443"
 
 # Add timing to your existing functions
 @time_function
