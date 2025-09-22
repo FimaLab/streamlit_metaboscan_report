@@ -104,7 +104,7 @@ def update_dash_data(patient_info, data_dict):
             url = f"{DASH_APP_URL}/update_data"
         
         # Отправка запроса
-        response = requests.post(url, json=payload, timeout=30)
+        response = requests.post(url, json=payload, timeout=50)
         
         if response.status_code == 200:
             # Получаем session_id из ответа
@@ -146,7 +146,7 @@ def download_pdf_from_dash(session_id):
     try:
         response = requests.get(
             f"{DASH_APP_URL}/download_pdf/{session_id}",
-            timeout=30,
+            timeout=50,
         )
         
         if response.status_code == 200:
