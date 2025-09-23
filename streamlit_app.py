@@ -97,6 +97,7 @@ def update_dash_data(patient_info, data_dict):
 
         # Определяем URL для запроса
         current_session_id = st.session_state.get('session_id')
+        st.write(current_session_id)
         if current_session_id:
             url = f"{DASH_APP_URL}/update_data/{current_session_id}"
         else:
