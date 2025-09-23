@@ -18,15 +18,34 @@ def time_function(func):
         result = func(*args, **kwargs)
         end_time = time.time()
         execution_time = end_time - start_time
-        st.session_state.setdefault('timing_data', {})[func.__name__] = execution_time
+        # Safe session state access
+        if 'timing_data' not in st.session_state:
+            st.session_state.timing_data = {}
+        st.session_state.timing_data[func.__name__] = execution_time
         return result
     return wrapper
 
-# Import your utility functions (assuming they exist)
-
 DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/"
 
-# Add timing to your existing functions
+def initialize_session_state():
+    """Initialize all session state variables safely"""
+    default_state = {
+        'processed_data': None,
+        'pdf_data': None,
+        'pdf_filename': None,
+        'dash_checked': False,
+        'timing_data': {},
+        'session_id': None,
+        'doctor_message': "",
+        'patient_message': "",
+        'patient_long_message': "",
+        'form_submitted': False
+    }
+    
+    for key, value in default_state.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
 @time_function
 def clean_data_for_json(data):
     """Рекурсивно очищает данные от не-JSON-совместимых значений"""
@@ -37,28 +56,20 @@ def clean_data_for_json(data):
             return float('inf') if data > 0 else float('-inf')
         else:
             return float(data)
-
     elif isinstance(data, (np.integer, int)):
         return int(data)
-
     elif isinstance(data, (np.bool_, bool)):
         return bool(data)
-
     elif isinstance(data, (str, type(None))):
         return data
-
     elif isinstance(data, (list, tuple)):
         return [clean_data_for_json(item) for item in data]
-
     elif isinstance(data, dict):
         return {key: clean_data_for_json(value) for key, value in data.items()}
-
     elif isinstance(data, pd.DataFrame):
         return clean_data_for_json(data.to_dict('records'))
-
     elif isinstance(data, pd.Series):
         return clean_data_for_json(data.to_dict())
-
     else:
         try:
             return str(data)
@@ -97,7 +108,6 @@ def update_dash_data(patient_info, data_dict):
 
         # Определяем URL для запроса
         current_session_id = st.session_state.get('session_id')
-        st.write(current_session_id)
         if current_session_id:
             url = f"{DASH_APP_URL}/update_data/{current_session_id}"
         else:
@@ -107,17 +117,12 @@ def update_dash_data(patient_info, data_dict):
         response = requests.post(url, json=payload, timeout=90)
 
         if response.status_code == 200:
-            # Получаем session_id из ответа
             response_data = response.json()
             session_id = response_data.get('session_id')
-
-            # Сохраняем session_id в состоянии Streamlit
             if session_id:
                 st.session_state.session_id = session_id
-
             return True, "Data updated successfully", session_id
         else:
-            # Безопасное извлечение сообщения об ошибке
             try:
                 error_data = response.json()
                 error_msg = error_data.get('message', f'HTTP Error {response.status_code}')
@@ -132,10 +137,10 @@ def update_dash_data(patient_info, data_dict):
 @time_function
 def validate_inputs(name, file1):
     """Validate user inputs before processing"""
-    if not name.strip():
+    if not name or not name.strip():
         st.error("Please enter a valid patient name")
         return False
-    if not file1:
+    if file1 is None:
         st.error("Please upload metabolomic data file")
         return False
     return True
@@ -152,7 +157,7 @@ def download_pdf_from_dash(session_id):
         if response.status_code == 200:
             pdf_data = response.content
             content_disposition = response.headers.get('Content-Disposition', '')
-            filename = f"MetaboScan_Report_.pdf"
+            filename = f"MetaboScan_Report.pdf"
 
             if 'filename*=' in content_disposition:
                 filename_part = content_disposition.split('filename*=')[1]
@@ -165,7 +170,6 @@ def download_pdf_from_dash(session_id):
 
             return True, pdf_data, filename
         else:
-            # Безопасное извлечение сообщения об ошибке
             try:
                 error_data = response.json()
                 error_msg = error_data.get('message', f'HTTP Error {response.status_code}')
@@ -198,9 +202,7 @@ def generate_pdf_report_api(patient_info, data_dict):
         st.error("Не удалось получить session_id от сервера")
         return None, None
 
-    # Сохраняем session_id для возможного повторного использования
     st.session_state.session_id = session_id
-
     time.sleep(1)  # Даем время на обработку данных
 
     with st.spinner("Генерация PDF отчета..."):
@@ -228,39 +230,31 @@ def read_metabolomic_data(uploaded_file):
 def display_timing_report():
     """Display timing analysis report"""
     if 'timing_data' in st.session_state and st.session_state.timing_data:
-
         timing_data = st.session_state.timing_data
         total_time = sum(timing_data.values())
 
-        # Create timing report
-        timing_df = pd.DataFrame({
-            'Process': list(timing_data.keys()),
-            'Time (seconds)': list(timing_data.values()),
-            'Percentage': [f"{(time/total_time)*100:.1f}%" for time in timing_data.values()]
-        }).sort_values('Time (seconds)', ascending=False)
+        if total_time > 0:
+            timing_df = pd.DataFrame({
+                'Process': list(timing_data.keys()),
+                'Time (seconds)': list(timing_data.values()),
+                'Percentage': [f"{(time/total_time)*100:.1f}%" for time in timing_data.values()]
+            }).sort_values('Time (seconds)', ascending=False)
 
-
-        slowest_time = timing_df.iloc[0]['Time (seconds)']
-        st.metric("Затраченное время", f"{slowest_time:.2f} сек")
+            if not timing_df.empty:
+                slowest_time = timing_df.iloc[0]['Time (seconds)']
+                st.metric("Затраченное время", f"{slowest_time:.2f} сек")
 
 def main():
+    # Initialize session state FIRST
+    initialize_session_state()
+    
+    # Then configure page
     st.set_page_config(
         page_title="Отчет Metaboscan",
         page_icon="🏥",
         layout="wide",
         initial_sidebar_state="collapsed"
     )
-
-    # Сайдбар с управлением Dash
-    with st.sidebar:
-        st.header("Управление Dash приложением")
-
-        if st.button("🔄 Проверить статус Dash"):
-            if check_dash_health():
-                st.success("Dash приложение работает")
-            else:
-                st.error("Dash приложение не доступно")
-
 
     # Стили
     st.markdown("""
@@ -274,26 +268,30 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    # Инициализация состояния
-    if 'processed_data' not in st.session_state:
-        st.session_state.processed_data = None
-    if 'pdf_data' not in st.session_state:
-        st.session_state.pdf_data = None
-    if 'pdf_filename' not in st.session_state:
-        st.session_state.pdf_filename = None
-    if 'dash_checked' not in st.session_state:
+    # Сайдбар с управлением Dash
+    with st.sidebar:
+        st.header("Управление Dash приложением")
+
+        if st.button("🔄 Проверить статус Dash"):
+            if check_dash_health():
+                st.success("Dash приложение работает")
+            else:
+                st.error("Dash приложение не доступно")
+        
+        # Display session info
+        if st.session_state.session_id:
+            st.info(f"Session ID: {st.session_state.session_id[:8]}...")
+
+    # Check Dash health on first run
+    if not st.session_state.dash_checked:
         if check_dash_health():
             st.sidebar.success("✓ Dash приложение работает")
         else:
             st.sidebar.warning("⚠️ Dash приложение не запущено")
         st.session_state.dash_checked = True
-    if 'timing_data' not in st.session_state:
-        st.session_state.timing_data = {}
 
     # Основная форма
-    col1, col2 = st.columns([1, 1])
-
-    with st.form("report_form"):
+    with st.form("report_form", clear_on_submit=False):
         st.write("Информация о пациенте")
 
         cols = st.columns(4)
@@ -320,16 +318,6 @@ def main():
 
         submitted = st.form_submit_button("Сформировать отчет", type="primary")
 
-   
-
-    # Инициализация сообщений
-    if 'doctor_message' not in st.session_state:
-        st.session_state.doctor_message = ""
-    if 'patient_message' not in st.session_state:
-        st.session_state.patient_message = ""
-    if 'patient_long_message' not in st.session_state:
-        st.session_state.patient_long_message = ""
-
     # Обработка отправки формы
     if submitted:
         if validate_inputs(name, metabolomic_data_file):
@@ -338,29 +326,34 @@ def main():
                     # Read metabolomic data
                     metabolomic_data_df = read_metabolomic_data(metabolomic_data_file)
                     if metabolomic_data_df is None:
+                        st.error("Не удалось прочитать файл с метаболомными данными")
                         return
 
                     # Prepare data dictionary with DataFrames
                     data_dict = {
                         "metabolomic_data": metabolomic_data_df,
-                        "patient_info": {
-                            "name": name.strip(),
-                            "age": age,
-                            "date": date.strftime("%d.%m.%Y"),
-                            "gender": gender,
-                            "layout": layout
-                        }
+                    }
+
+                    patient_info = {
+                        "name": name.strip(),
+                        "age": age,
+                        "date": date.strftime("%d.%m.%Y"),
+                        "gender": gender,
+                        "layout": layout
                     }
 
                     # Сохраняем результаты
-                    st.session_state.processed_data = data_dict
+                    st.session_state.processed_data = {
+                        "patient_info": patient_info,
+                        "data_dict": data_dict
+                    }
                     st.session_state.pdf_data = None
                     st.session_state.pdf_filename = None
 
                     if layout == "basic":
                         pdf_data, filename = generate_pdf_report_api(
-                            st.session_state.processed_data["patient_info"],
-                            st.session_state.processed_data
+                            patient_info,
+                            data_dict
                         )
 
                         if pdf_data:
@@ -404,7 +397,7 @@ def main():
                 key="patient_long_message_input",
                 height=150,
                 max_chars=3000,
-                label = "Текст для пациента (расширенный)",
+                label="Текст для пациента (расширенный)",
                 placeholder="Введите выводы для пациента (расширенный)..."
             )
             st.session_state.doctor_message = st.text_area(
@@ -415,6 +408,7 @@ def main():
                 label="Текст для врача",
                 placeholder="Введите выводы для врача..."
             )
+            
             submitted_recommendation = st.form_submit_button("Сформировать отчет с рекомендациями", type="primary")
 
         if submitted_recommendation:
@@ -424,25 +418,15 @@ def main():
                 patient_info_with_messages["patient_message"] = st.session_state.patient_message
                 patient_info_with_messages["patient_long_message"] = st.session_state.patient_long_message
 
-                st.session_state.pdf_data = None
-                st.session_state.pdf_filename = None
-
                 pdf_data, filename = generate_pdf_report_api(
                     patient_info_with_messages,
-                    st.session_state.processed_data
+                    st.session_state.processed_data["data_dict"]
                 )
 
                 if pdf_data:
                     st.session_state.pdf_data = pdf_data
                     st.session_state.pdf_filename = filename
                     st.success("✅ Отчет с рекомендациями успешно сформирован!")
-                    st.download_button(
-                        label="📥 Скачать отчет с рекомендациями",
-                        data=st.session_state.pdf_data,
-                        file_name=st.session_state.pdf_filename,
-                        mime="application/pdf",
-                        key="download_pdf_recomendation"
-                    )
                 else:
                     st.error("Ошибка при генерации отчета с рекомендациями")
 
