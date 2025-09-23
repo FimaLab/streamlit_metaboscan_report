@@ -9,6 +9,7 @@ import numpy as np
 import time
 from functools import wraps
 import json
+import hashlib
 
 # Add timing decorator
 def time_function(func):
@@ -18,33 +19,88 @@ def time_function(func):
         result = func(*args, **kwargs)
         end_time = time.time()
         execution_time = end_time - start_time
-        # Safe session state access
-        if 'timing_data' not in st.session_state:
-            st.session_state.timing_data = {}
-        st.session_state.timing_data[func.__name__] = execution_time
+        
+        # Safe session state access for timing data
+        if 'multi_user_sessions' in st.session_state:
+            current_user = st.session_state.get('current_user')
+            if current_user and current_user in st.session_state.multi_user_sessions:
+                if 'timing_data' not in st.session_state.multi_user_sessions[current_user]:
+                    st.session_state.multi_user_sessions[current_user]['timing_data'] = {}
+                st.session_state.multi_user_sessions[current_user]['timing_data'][func.__name__] = execution_time
+        
         return result
     return wrapper
 
 DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/"
 
-def initialize_session_state():
-    """Initialize all session state variables safely"""
-    default_state = {
-        'processed_data': None,
-        'pdf_data': None,
-        'pdf_filename': None,
-        'dash_checked': False,
-        'timing_data': {},
-        'session_id': None,
-        'doctor_message': "",
-        'patient_message': "",
-        'patient_long_message': "",
-        'form_submitted': False
-    }
+def get_user_session_key():
+    """Генерируем уникальный ключ сессии для каждого пользователя"""
+    try:
+        # Используем комбинацию из времени и случайных данных
+        user_key = hashlib.md5(f"{time.time()}_{id(st)}".encode()).hexdigest()
+        return f"user_{user_key}"
+    except:
+        # Fallback: используем текущее время
+        return f"user_{int(time.time()*1000)}"
+
+def initialize_user_session():
+    """Инициализация сессии для конкретного пользователя"""
+    user_key = get_user_session_key()
     
-    for key, value in default_state.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    # Инициализируем многопользовательскую систему
+    if 'multi_user_sessions' not in st.session_state:
+        st.session_state.multi_user_sessions = {}
+    
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = user_key
+    
+    # Создаем пространство для нового пользователя
+    if user_key not in st.session_state.multi_user_sessions:
+        st.session_state.multi_user_sessions[user_key] = {
+            'processed_data': None,
+            'pdf_data': None,
+            'pdf_filename': None,
+            'dash_checked': False,
+            'timing_data': {},
+            'session_id': None,
+            'doctor_message': "",
+            'patient_message': "",
+            'patient_long_message': "",
+            'last_activity': time.time(),
+            'user_created': time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+    
+    # Обновляем время активности
+    st.session_state.multi_user_sessions[user_key]['last_activity'] = time.time()
+    
+    return user_key
+
+def get_user_data(key):
+    """Получаем данные конкретного пользователя"""
+    if 'multi_user_sessions' in st.session_state and key in st.session_state.multi_user_sessions:
+        return st.session_state.multi_user_sessions[key]
+    return {}
+
+def set_user_data(key, data):
+    """Устанавливаем данные для конкретного пользователя"""
+    if 'multi_user_sessions' in st.session_state and key in st.session_state.multi_user_sessions:
+        st.session_state.multi_user_sessions[key].update(data)
+        st.session_state.multi_user_sessions[key]['last_activity'] = time.time()
+
+def cleanup_inactive_sessions(max_age=3600):
+    """Очистка неактивных сессий (старше 1 часа)"""
+    if 'multi_user_sessions' not in st.session_state:
+        return
+    
+    current_time = time.time()
+    inactive_keys = []
+    
+    for key, session_data in st.session_state.multi_user_sessions.items():
+        if current_time - session_data.get('last_activity', 0) > max_age:
+            inactive_keys.append(key)
+    
+    for key in inactive_keys:
+        del st.session_state.multi_user_sessions[key]
 
 @time_function
 def clean_data_for_json(data):
@@ -88,7 +144,7 @@ def dataframe_to_dict(df):
     }
 
 @time_function
-def update_dash_data(patient_info, data_dict):
+def update_dash_data(patient_info, data_dict, user_key):
     """Оптимизированная отправка данных в Dash с возвратом session_id"""
     try:
         # Prepare the data payload with DataFrames as serializable dicts
@@ -107,7 +163,9 @@ def update_dash_data(patient_info, data_dict):
                 payload[key] = patient_info[key]
 
         # Определяем URL для запроса
-        current_session_id = st.session_state.get('session_id')
+        user_data = get_user_data(user_key)
+        current_session_id = user_data.get('session_id')
+        
         if current_session_id:
             url = f"{DASH_APP_URL}/update_data/{current_session_id}"
         else:
@@ -120,7 +178,7 @@ def update_dash_data(patient_info, data_dict):
             response_data = response.json()
             session_id = response_data.get('session_id')
             if session_id:
-                st.session_state.session_id = session_id
+                set_user_data(user_key, {'session_id': session_id})
             return True, "Data updated successfully", session_id
         else:
             try:
@@ -190,9 +248,9 @@ def check_dash_health():
         return False
 
 @time_function
-def generate_pdf_report_api(patient_info, data_dict):
+def generate_pdf_report_api(patient_info, data_dict, user_key):
     """Генерация PDF отчета через Dash API с session_id"""
-    success, message, session_id = update_dash_data(patient_info, data_dict)
+    success, message, session_id = update_dash_data(patient_info, data_dict, user_key)
 
     if not success:
         st.error(f"Ошибка обновления данных: {message}")
@@ -202,7 +260,6 @@ def generate_pdf_report_api(patient_info, data_dict):
         st.error("Не удалось получить session_id от сервера")
         return None, None
 
-    st.session_state.session_id = session_id
     time.sleep(1)  # Даем время на обработку данных
 
     with st.spinner("Генерация PDF отчета..."):
@@ -227,12 +284,10 @@ def read_metabolomic_data(uploaded_file):
         st.error(f"Error reading metabolomic data: {str(e)}")
         return None
 
-def display_timing_report():
-    """Display timing analysis report"""
-    if 'timing_data' in st.session_state and st.session_state.timing_data:
-        timing_data = st.session_state.timing_data
+def display_timing_report(timing_data):
+    """Display timing analysis report for specific user"""
+    if timing_data:
         total_time = sum(timing_data.values())
-
         if total_time > 0:
             timing_df = pd.DataFrame({
                 'Process': list(timing_data.keys()),
@@ -262,7 +317,8 @@ def main():
     # Отображаем информацию о текущих пользователях в сайдбаре
     with st.sidebar:
         st.header("Управление Dash приложением")
-        st.info(f"Активных сессий: {len(st.session_state.get('multi_user_sessions', {}))}")
+        active_sessions = len(st.session_state.get('multi_user_sessions', {}))
+        st.info(f"Активных сессий: {active_sessions}")
         
         if st.button("🔄 Проверить статус Dash"):
             if check_dash_health():
@@ -281,7 +337,10 @@ def main():
                 'processed_data': None,
                 'pdf_data': None,
                 'pdf_filename': None,
-                'session_id': None
+                'session_id': None,
+                'doctor_message': "",
+                'patient_message': "",
+                'patient_long_message': ""
             })
             st.rerun()
 
@@ -355,7 +414,8 @@ def main():
                     if layout == "basic":
                         pdf_data, filename = generate_pdf_report_api(
                             patient_info,
-                            data_dict
+                            data_dict,
+                            user_key
                         )
 
                         if pdf_data:
@@ -440,7 +500,8 @@ def main():
 
                 pdf_data, filename = generate_pdf_report_api(
                     patient_info_with_messages,
-                    processed_data["data_dict"]
+                    processed_data["data_dict"],
+                    user_key
                 )
 
                 if pdf_data:
@@ -455,21 +516,6 @@ def main():
     # Display timing report for current user
     if enable_timing and user_data.get('timing_data'):
         display_timing_report(user_data['timing_data'])
-
-def display_timing_report(timing_data):
-    """Display timing analysis report for specific user"""
-    if timing_data:
-        total_time = sum(timing_data.values())
-        if total_time > 0:
-            timing_df = pd.DataFrame({
-                'Process': list(timing_data.keys()),
-                'Time (seconds)': list(timing_data.values()),
-                'Percentage': [f"{(time/total_time)*100:.1f}%" for time in timing_data.values()]
-            }).sort_values('Time (seconds)', ascending=False)
-
-            if not timing_df.empty:
-                slowest_time = timing_df.iloc[0]['Time (seconds)']
-                st.metric("Затраченное время", f"{slowest_time:.2f} сек")
 
 if __name__ == "__main__":
     main()
