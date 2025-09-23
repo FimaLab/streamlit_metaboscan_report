@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+import tempfile
 import pandas as pd
 from datetime import datetime
 import time
@@ -6,6 +8,7 @@ import requests
 import numpy as np
 import time
 from functools import wraps
+import json
 
 # Add timing decorator
 def time_function(func):
@@ -19,8 +22,9 @@ def time_function(func):
         return result
     return wrapper
 
+# Import your utility functions (assuming they exist)
 
-DASH_APP_URL = "http://localhost:8050"
+DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/"
 
 # Add timing to your existing functions
 @time_function
@@ -33,28 +37,28 @@ def clean_data_for_json(data):
             return float('inf') if data > 0 else float('-inf')
         else:
             return float(data)
-    
+
     elif isinstance(data, (np.integer, int)):
         return int(data)
-    
+
     elif isinstance(data, (np.bool_, bool)):
         return bool(data)
-    
+
     elif isinstance(data, (str, type(None))):
         return data
-    
+
     elif isinstance(data, (list, tuple)):
         return [clean_data_for_json(item) for item in data]
-    
+
     elif isinstance(data, dict):
         return {key: clean_data_for_json(value) for key, value in data.items()}
-    
+
     elif isinstance(data, pd.DataFrame):
         return clean_data_for_json(data.to_dict('records'))
-    
+
     elif isinstance(data, pd.Series):
         return clean_data_for_json(data.to_dict())
-    
+
     else:
         try:
             return str(data)
@@ -85,31 +89,31 @@ def update_dash_data(patient_info, data_dict):
             'layout': patient_info['layout'],
             'metabolomic_data': dataframe_to_dict(data_dict['metabolomic_data'])
         }
-        
+
         # Добавление опциональных сообщений
         for key in ['doctor_message', 'patient_message', 'patient_long_message']:
             if key in patient_info:
                 payload[key] = patient_info[key]
-        
+
         # Определяем URL для запроса
         current_session_id = st.session_state.get('session_id')
         if current_session_id:
             url = f"{DASH_APP_URL}/update_data/{current_session_id}"
         else:
             url = f"{DASH_APP_URL}/update_data"
-        
+
         # Отправка запроса
-        response = requests.post(url, json=payload, timeout=30)
-        
+        response = requests.post(url, json=payload, timeout=90)
+
         if response.status_code == 200:
             # Получаем session_id из ответа
             response_data = response.json()
             session_id = response_data.get('session_id')
-            
+
             # Сохраняем session_id в состоянии Streamlit
             if session_id:
                 st.session_state.session_id = session_id
-            
+
             return True, "Data updated successfully", session_id
         else:
             # Безопасное извлечение сообщения об ошибке
@@ -119,7 +123,7 @@ def update_dash_data(patient_info, data_dict):
             except (ValueError, TypeError):
                 error_msg = response.text.strip() or f'HTTP Error {response.status_code}'
             return False, error_msg, None
-        
+
     except Exception as e:
         error_msg = f"Ошибка при подготовке данных: {str(e)}"
         return False, error_msg, None
@@ -141,14 +145,15 @@ def download_pdf_from_dash(session_id):
     try:
         response = requests.get(
             f"{DASH_APP_URL}/download_pdf/{session_id}",
-            timeout=30,
+            timeout=50,
+            timeout=90,
         )
-        
+
         if response.status_code == 200:
             pdf_data = response.content
             content_disposition = response.headers.get('Content-Disposition', '')
             filename = f"MetaboScan_Report_.pdf"
-            
+
             if 'filename*=' in content_disposition:
                 filename_part = content_disposition.split('filename*=')[1]
                 if 'UTF-8\'\'' in filename_part:
@@ -157,7 +162,7 @@ def download_pdf_from_dash(session_id):
                     filename = filename_part.strip('";')
             elif 'filename=' in content_disposition:
                 filename = content_disposition.split('filename=')[1].strip('"')
-            
+
             return True, pdf_data, filename
         else:
             # Безопасное извлечение сообщения об ошибке
@@ -167,7 +172,7 @@ def download_pdf_from_dash(session_id):
             except (ValueError, TypeError):
                 error_msg = response.text.strip() or f'HTTP Error {response.status_code}'
             return False, None, error_msg
-            
+
     except Exception as e:
         return False, None, str(e)
 
@@ -184,23 +189,23 @@ def check_dash_health():
 def generate_pdf_report_api(patient_info, data_dict):
     """Генерация PDF отчета через Dash API с session_id"""
     success, message, session_id = update_dash_data(patient_info, data_dict)
-    
+
     if not success:
         st.error(f"Ошибка обновления данных: {message}")
         return None, None
-    
+
     if not session_id:
         st.error("Не удалось получить session_id от сервера")
         return None, None
-    
+
     # Сохраняем session_id для возможного повторного использования
     st.session_state.session_id = session_id
-    
+
     time.sleep(1)  # Даем время на обработку данных
-    
+
     with st.spinner("Генерация PDF отчета..."):
         success, pdf_data, result = download_pdf_from_dash(session_id)
-        
+
         if success:
             return pdf_data, result
         else:
@@ -223,18 +228,18 @@ def read_metabolomic_data(uploaded_file):
 def display_timing_report():
     """Display timing analysis report"""
     if 'timing_data' in st.session_state and st.session_state.timing_data:
-        
+
         timing_data = st.session_state.timing_data
         total_time = sum(timing_data.values())
-        
+
         # Create timing report
         timing_df = pd.DataFrame({
             'Process': list(timing_data.keys()),
             'Time (seconds)': list(timing_data.values()),
             'Percentage': [f"{(time/total_time)*100:.1f}%" for time in timing_data.values()]
         }).sort_values('Time (seconds)', ascending=False)
-        
-        
+
+
         slowest_time = timing_df.iloc[0]['Time (seconds)']
         st.metric("Затраченное время", f"{slowest_time:.2f} сек")
 
@@ -249,13 +254,13 @@ def main():
     # Сайдбар с управлением Dash
     with st.sidebar:
         st.header("Управление Dash приложением")
-        
+
         if st.button("🔄 Проверить статус Dash"):
             if check_dash_health():
                 st.success("Dash приложение работает")
             else:
                 st.error("Dash приложение не доступно")
-        
+
 
     # Стили
     st.markdown("""
@@ -285,9 +290,12 @@ def main():
     if 'timing_data' not in st.session_state:
         st.session_state.timing_data = {}
 
+    # Основная форма
+    col1, col2 = st.columns([1, 1])
+
     with st.form("report_form"):
         st.write("Информация о пациенте")
-        
+
         cols = st.columns(4)
         with cols[0]:
             name = st.text_input("Полное имя (ФИО)", placeholder="Иванов Иван Иванович")
@@ -297,21 +305,22 @@ def main():
             gender = st.selectbox("Пол", ("М", "Ж"), index=0)
         with cols[3]:
             date = st.date_input("Дата отчета", datetime.now(), format="DD.MM.YYYY")
-        
+
         layout = st.selectbox("Тип отчета", ("basic", "recommendation"), index=0)
-        
+
         st.write("Загрузите данные")
         metabolomic_data_file = st.file_uploader(
             "Метаболомный профиль пациента (Excel)",
             type=["xlsx", "xls"],
             key="metabolomic_data"
         )
-        
+
         # Add checkbox for timing analysis
         enable_timing = st.checkbox("Включить анализ времени выполнения", value=True)
-        
+
         submitted = st.form_submit_button("Сформировать отчет", type="primary")
 
+   
 
     # Инициализация сообщений
     if 'doctor_message' not in st.session_state:
@@ -320,7 +329,7 @@ def main():
         st.session_state.patient_message = ""
     if 'patient_long_message' not in st.session_state:
         st.session_state.patient_long_message = ""
-    
+
     # Обработка отправки формы
     if submitted:
         if validate_inputs(name, metabolomic_data_file):
@@ -330,7 +339,7 @@ def main():
                     metabolomic_data_df = read_metabolomic_data(metabolomic_data_file)
                     if metabolomic_data_df is None:
                         return
-                    
+
                     # Prepare data dictionary with DataFrames
                     data_dict = {
                         "metabolomic_data": metabolomic_data_df,
@@ -342,26 +351,26 @@ def main():
                             "layout": layout
                         }
                     }
-                    
+
                     # Сохраняем результаты
                     st.session_state.processed_data = data_dict
                     st.session_state.pdf_data = None
                     st.session_state.pdf_filename = None
-                    
+
                     if layout == "basic":
                         pdf_data, filename = generate_pdf_report_api(
                             st.session_state.processed_data["patient_info"],
                             st.session_state.processed_data
                         )
-                        
+
                         if pdf_data:
                             st.session_state.pdf_data = pdf_data
                             st.session_state.pdf_filename = filename
                             st.success("✅ Отчет успешно сформирован!")
-                    
+
                     elif layout == "recommendation":
                         st.info("Пожалуйста, заполните поля ниже для генерации отчета с рекомендациями")
-            
+
                 except Exception as e:
                     st.error(f"An error occurred: {str(e)}")
                     import traceback
@@ -376,11 +385,11 @@ def main():
             mime="application/pdf",
             key="download_pdf"
         )
-    
+
     # Форма рекомендаций
     if (st.session_state.processed_data and 
         st.session_state.processed_data["patient_info"]["layout"] == "recommendation"):
-        
+
         with st.form("recommendation_form"):
             st.session_state.patient_message = st.text_area(
                 value=st.session_state.patient_message,
@@ -407,22 +416,22 @@ def main():
                 placeholder="Введите выводы для врача..."
             )
             submitted_recommendation = st.form_submit_button("Сформировать отчет с рекомендациями", type="primary")
-            
+
         if submitted_recommendation:
             with st.spinner("Генерируем отчет с рекомендациями..."):
                 patient_info_with_messages = st.session_state.processed_data["patient_info"].copy()
                 patient_info_with_messages["doctor_message"] = st.session_state.doctor_message
                 patient_info_with_messages["patient_message"] = st.session_state.patient_message
                 patient_info_with_messages["patient_long_message"] = st.session_state.patient_long_message
-                
+
                 st.session_state.pdf_data = None
                 st.session_state.pdf_filename = None
-                
+
                 pdf_data, filename = generate_pdf_report_api(
                     patient_info_with_messages,
                     st.session_state.processed_data
                 )
-                
+
                 if pdf_data:
                     st.session_state.pdf_data = pdf_data
                     st.session_state.pdf_filename = filename
