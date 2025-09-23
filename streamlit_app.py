@@ -245,80 +245,81 @@ def display_timing_report():
                 st.metric("Затраченное время", f"{slowest_time:.2f} сек")
 
 def main():
-    # Initialize session state FIRST
-    initialize_session_state()
+    # Инициализация многопользовательской системы
+    user_key = initialize_user_session()
+    user_data = get_user_data(user_key)
     
-    # Then configure page
+    # Очистка старых сессий при каждой загрузке
+    cleanup_inactive_sessions()
+    
     st.set_page_config(
         page_title="Отчет Metaboscan",
         page_icon="🏥",
         layout="wide",
         initial_sidebar_state="collapsed"
     )
-
-    # Стили
-    st.markdown("""
-        <style>
-            body { font-size: 14px !important; }
-            .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input {
-                font-size: 14px !important;
-            }
-            .stDataFrame { font-size: 14px !important; }
-            .stButton button { font-size: 14px !important; }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # Сайдбар с управлением Dash
+    
+    # Отображаем информацию о текущих пользователях в сайдбаре
     with st.sidebar:
         st.header("Управление Dash приложением")
-
+        st.info(f"Активных сессий: {len(st.session_state.get('multi_user_sessions', {}))}")
+        
         if st.button("🔄 Проверить статус Dash"):
             if check_dash_health():
                 st.success("Dash приложение работает")
+                set_user_data(user_key, {'dash_checked': True})
             else:
                 st.error("Dash приложение не доступно")
         
-        # Display session info
-        if st.session_state.session_id:
-            st.info(f"Session ID: {st.session_state.session_id[:8]}...")
+        # Информация о текущем пользователе
+        if user_data.get('session_id'):
+            st.info(f"Session ID: {user_data['session_id'][:8]}...")
+        
+        # Кнопка очистки текущей сессии
+        if st.button("🧹 Очистить мою сессию"):
+            set_user_data(user_key, {
+                'processed_data': None,
+                'pdf_data': None,
+                'pdf_filename': None,
+                'session_id': None
+            })
+            st.rerun()
 
-    # Check Dash health on first run
-    if not st.session_state.dash_checked:
-        if check_dash_health():
-            st.sidebar.success("✓ Dash приложение работает")
-        else:
-            st.sidebar.warning("⚠️ Dash приложение не запущено")
-        st.session_state.dash_checked = True
-
-    # Основная форма
+    # Основная форма с использованием данных конкретного пользователя
     with st.form("report_form", clear_on_submit=False):
         st.write("Информация о пациенте")
 
         cols = st.columns(4)
         with cols[0]:
-            name = st.text_input("Полное имя (ФИО)", placeholder="Иванов Иван Иванович")
+            name = st.text_input("Полное имя (ФИО)", 
+                               placeholder="Иванов Иван Иванович",
+                               key=f"name_{user_key}")  # Уникальный ключ
         with cols[1]:
-            age = st.number_input("Возраст", min_value=0, max_value=120, value=47)
+            age = st.number_input("Возраст", min_value=0, max_value=120, 
+                                value=47, key=f"age_{user_key}")
         with cols[2]:
-            gender = st.selectbox("Пол", ("М", "Ж"), index=0)
+            gender = st.selectbox("Пол", ("М", "Ж"), 
+                                index=0, key=f"gender_{user_key}")
         with cols[3]:
-            date = st.date_input("Дата отчета", datetime.now(), format="DD.MM.YYYY")
+            date = st.date_input("Дата отчета", datetime.now(), 
+                               format="DD.MM.YYYY", key=f"date_{user_key}")
 
-        layout = st.selectbox("Тип отчета", ("basic", "recommendation"), index=0)
+        layout = st.selectbox("Тип отчета", ("basic", "recommendation"), 
+                            index=0, key=f"layout_{user_key}")
 
         st.write("Загрузите данные")
         metabolomic_data_file = st.file_uploader(
             "Метаболомный профиль пациента (Excel)",
             type=["xlsx", "xls"],
-            key="metabolomic_data"
+            key=f"metabolomic_data_{user_key}"  # Уникальный ключ для каждого пользователя
         )
 
-        # Add checkbox for timing analysis
-        enable_timing = st.checkbox("Включить анализ времени выполнения", value=True)
+        enable_timing = st.checkbox("Включить анализ времени выполнения", 
+                                  value=True, key=f"timing_{user_key}")
 
         submitted = st.form_submit_button("Сформировать отчет", type="primary")
 
-    # Обработка отправки формы
+    # Обработка отправки формы для конкретного пользователя
     if submitted:
         if validate_inputs(name, metabolomic_data_file):
             with st.spinner("🔬 Читаем данные и генерируем отчет..."):
@@ -326,10 +327,9 @@ def main():
                     # Read metabolomic data
                     metabolomic_data_df = read_metabolomic_data(metabolomic_data_file)
                     if metabolomic_data_df is None:
-                        st.error("Не удалось прочитать файл с метаболомными данными")
                         return
 
-                    # Prepare data dictionary with DataFrames
+                    # Prepare data for current user
                     data_dict = {
                         "metabolomic_data": metabolomic_data_df,
                     }
@@ -342,13 +342,15 @@ def main():
                         "layout": layout
                     }
 
-                    # Сохраняем результаты
-                    st.session_state.processed_data = {
-                        "patient_info": patient_info,
-                        "data_dict": data_dict
-                    }
-                    st.session_state.pdf_data = None
-                    st.session_state.pdf_filename = None
+                    # Сохраняем результаты для текущего пользователя
+                    set_user_data(user_key, {
+                        'processed_data': {
+                            "patient_info": patient_info,
+                            "data_dict": data_dict
+                        },
+                        'pdf_data': None,
+                        'pdf_filename': None
+                    })
 
                     if layout == "basic":
                         pdf_data, filename = generate_pdf_report_api(
@@ -357,8 +359,10 @@ def main():
                         )
 
                         if pdf_data:
-                            st.session_state.pdf_data = pdf_data
-                            st.session_state.pdf_filename = filename
+                            set_user_data(user_key, {
+                                'pdf_data': pdf_data,
+                                'pdf_filename': filename
+                            })
                             st.success("✅ Отчет успешно сформирован!")
 
                     elif layout == "recommendation":
@@ -366,43 +370,52 @@ def main():
 
                 except Exception as e:
                     st.error(f"An error occurred: {str(e)}")
-                    import traceback
-                    st.error(f"Traceback: {traceback.format_exc()}")
 
-    # Кнопка скачивания PDF
-    if st.session_state.pdf_data:
+    # Кнопка скачивания PDF для текущего пользователя
+    current_pdf_data = user_data.get('pdf_data')
+    current_filename = user_data.get('pdf_filename')
+    
+    if current_pdf_data:
         st.download_button(
             label="📥 Скачать отчет",
-            data=st.session_state.pdf_data,
-            file_name=st.session_state.pdf_filename,
+            data=current_pdf_data,
+            file_name=current_filename,
             mime="application/pdf",
-            key="download_pdf"
+            key=f"download_{user_key}"  # Уникальный ключ
         )
 
-    # Форма рекомендаций
-    if (st.session_state.processed_data and 
-        st.session_state.processed_data["patient_info"]["layout"] == "recommendation"):
+    # Форма рекомендаций для текущего пользователя
+    processed_data = user_data.get('processed_data')
+    if (processed_data and 
+        processed_data["patient_info"]["layout"] == "recommendation"):
 
         with st.form("recommendation_form"):
-            st.session_state.patient_message = st.text_area(
-                value=st.session_state.patient_message,
-                key="patient_message_input",
+            # Используем текущие значения из сессии пользователя
+            current_patient_message = user_data.get('patient_message', '')
+            current_patient_long_message = user_data.get('patient_long_message', '')
+            current_doctor_message = user_data.get('doctor_message', '')
+            
+            patient_message = st.text_area(
+                value=current_patient_message,
+                key=f"patient_msg_{user_key}",
                 height=150,
                 max_chars=600,
                 label="Текст для пациента",
                 placeholder="Введите выводы для пациента..."
             )
-            st.session_state.patient_long_message = st.text_area(
-                value=st.session_state.patient_long_message,
-                key="patient_long_message_input",
+            
+            patient_long_message = st.text_area(
+                value=current_patient_long_message,
+                key=f"patient_long_msg_{user_key}",
                 height=150,
                 max_chars=3000,
                 label="Текст для пациента (расширенный)",
                 placeholder="Введите выводы для пациента (расширенный)..."
             )
-            st.session_state.doctor_message = st.text_area(
-                value=st.session_state.doctor_message,
-                key="doctor_message_input",
+            
+            doctor_message = st.text_area(
+                value=current_doctor_message,
+                key=f"doctor_msg_{user_key}",
                 height=150,
                 max_chars=3000,
                 label="Текст для врача",
@@ -412,27 +425,51 @@ def main():
             submitted_recommendation = st.form_submit_button("Сформировать отчет с рекомендациями", type="primary")
 
         if submitted_recommendation:
+            # Сохраняем сообщения для текущего пользователя
+            set_user_data(user_key, {
+                'patient_message': patient_message,
+                'patient_long_message': patient_long_message,
+                'doctor_message': doctor_message
+            })
+            
             with st.spinner("Генерируем отчет с рекомендациями..."):
-                patient_info_with_messages = st.session_state.processed_data["patient_info"].copy()
-                patient_info_with_messages["doctor_message"] = st.session_state.doctor_message
-                patient_info_with_messages["patient_message"] = st.session_state.patient_message
-                patient_info_with_messages["patient_long_message"] = st.session_state.patient_long_message
+                patient_info_with_messages = processed_data["patient_info"].copy()
+                patient_info_with_messages["doctor_message"] = doctor_message
+                patient_info_with_messages["patient_message"] = patient_message
+                patient_info_with_messages["patient_long_message"] = patient_long_message
 
                 pdf_data, filename = generate_pdf_report_api(
                     patient_info_with_messages,
-                    st.session_state.processed_data["data_dict"]
+                    processed_data["data_dict"]
                 )
 
                 if pdf_data:
-                    st.session_state.pdf_data = pdf_data
-                    st.session_state.pdf_filename = filename
+                    set_user_data(user_key, {
+                        'pdf_data': pdf_data,
+                        'pdf_filename': filename
+                    })
                     st.success("✅ Отчет с рекомендациями успешно сформирован!")
                 else:
                     st.error("Ошибка при генерации отчета с рекомендациями")
 
-    # Display timing report if enabled
-    if enable_timing and st.session_state.timing_data:
-        display_timing_report()
+    # Display timing report for current user
+    if enable_timing and user_data.get('timing_data'):
+        display_timing_report(user_data['timing_data'])
+
+def display_timing_report(timing_data):
+    """Display timing analysis report for specific user"""
+    if timing_data:
+        total_time = sum(timing_data.values())
+        if total_time > 0:
+            timing_df = pd.DataFrame({
+                'Process': list(timing_data.keys()),
+                'Time (seconds)': list(timing_data.values()),
+                'Percentage': [f"{(time/total_time)*100:.1f}%" for time in timing_data.values()]
+            }).sort_values('Time (seconds)', ascending=False)
+
+            if not timing_df.empty:
+                slowest_time = timing_df.iloc[0]['Time (seconds)']
+                st.metric("Затраченное время", f"{slowest_time:.2f} сек")
 
 if __name__ == "__main__":
     main()
