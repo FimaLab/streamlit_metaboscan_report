@@ -1,6 +1,4 @@
 import streamlit as st
-import os
-import tempfile
 import pandas as pd
 from datetime import datetime
 import time
@@ -8,7 +6,6 @@ import requests
 import numpy as np
 import time
 from functools import wraps
-import json
 
 # Add timing decorator
 def time_function(func):
@@ -22,10 +19,8 @@ def time_function(func):
         return result
     return wrapper
 
-# Import your utility functions (assuming they exist)
-from ui_kit.streamlit_utilit import *
 
-DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/"
+DASH_APP_URL = "http://localhost:8050"
 
 # Add timing to your existing functions
 @time_function
@@ -104,7 +99,7 @@ def update_dash_data(patient_info, data_dict):
             url = f"{DASH_APP_URL}/update_data"
         
         # Отправка запроса
-        response = requests.post(url, json=payload, timeout=90)
+        response = requests.post(url, json=payload, timeout=30)
         
         if response.status_code == 200:
             # Получаем session_id из ответа
@@ -146,7 +141,7 @@ def download_pdf_from_dash(session_id):
     try:
         response = requests.get(
             f"{DASH_APP_URL}/download_pdf/{session_id}",
-            timeout=90,
+            timeout=30,
         )
         
         if response.status_code == 200:
@@ -290,86 +285,33 @@ def main():
     if 'timing_data' not in st.session_state:
         st.session_state.timing_data = {}
 
-    # Основная форма
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        with st.form("report_form"):
-            st.write("Информация о пациенте")
-            
-            cols = st.columns(4)
-            with cols[0]:
-                name = st.text_input("Полное имя (ФИО)", placeholder="Иванов Иван Иванович")
-            with cols[1]:
-                age = st.number_input("Возраст", min_value=0, max_value=120, value=47)
-            with cols[2]:
-                gender = st.selectbox("Пол", ("М", "Ж"), index=0)
-            with cols[3]:
-                date = st.date_input("Дата отчета", datetime.now(), format="DD.MM.YYYY")
-            
-            layout = st.selectbox("Тип отчета", ("basic", "recommendation"), index=0)
-            
-            st.write("Загрузите данные")
-            metabolomic_data_file = st.file_uploader(
-                "Метаболомный профиль пациента (Excel)",
-                type=["xlsx", "xls"],
-                key="metabolomic_data"
-            )
-            
-            # Add checkbox for timing analysis
-            enable_timing = st.checkbox("Включить анализ времени выполнения", value=True)
-            
-            submitted = st.form_submit_button("Сформировать отчет", type="primary")
-    
-    with col2:
-        st.write("Редактирование параметров")
+    with st.form("report_form"):
+        st.write("Информация о пациенте")
         
-        REF_FILE = "Ref.xlsx"
-        if os.path.exists(REF_FILE):
-            try:
-                if 'original_ref' not in st.session_state or 'edited_ref' not in st.session_state:
-                    xls = pd.ExcelFile(REF_FILE)
-                    st.session_state.original_ref = {
-                        sheet_name: xls.parse(sheet_name) 
-                        for sheet_name in xls.sheet_names
-                    }
-                    st.session_state.edited_ref = {
-                        sheet_name: df.copy() 
-                        for sheet_name, df in st.session_state.original_ref.items()
-                    }
-                
-                tabs = st.tabs(list(st.session_state.edited_ref.keys()))
-                
-                for tab, (sheet_name, df) in zip(tabs, st.session_state.edited_ref.items()):
-                    with tab:
-                        edited_df = st.data_editor(
-                            df,
-                            column_config={
-                            "веса": st.column_config.NumberColumn(
-                                "веса",
-                                min_value=0.0,
-                                max_value=10.0,
-                                step=0.01,
-                            )},
-                            num_rows="dynamic",
-                            use_container_width=True,
-                            height=300,
-                            key=f"editor_{sheet_name}"
-                        )
-                        st.session_state.edited_ref[sheet_name] = edited_df
-                
-                if st.button("Сбросить изменения", key="reset_button"):
-                    st.session_state.edited_ref = {
-                        sheet_name: df.copy() 
-                        for sheet_name, df in st.session_state.original_ref.items()
-                    }
-                    st.rerun()
-                
-            except Exception as e:
-                st.error(f"Ошибка при загрузке файла параметров: {str(e)}")
-        else:
-            st.error(f"Файл параметров не найден: {REF_FILE}")
-            st.session_state.edited_ref = None
+        cols = st.columns(4)
+        with cols[0]:
+            name = st.text_input("Полное имя (ФИО)", placeholder="Иванов Иван Иванович")
+        with cols[1]:
+            age = st.number_input("Возраст", min_value=0, max_value=120, value=47)
+        with cols[2]:
+            gender = st.selectbox("Пол", ("М", "Ж"), index=0)
+        with cols[3]:
+            date = st.date_input("Дата отчета", datetime.now(), format="DD.MM.YYYY")
+        
+        layout = st.selectbox("Тип отчета", ("basic", "recommendation"), index=0)
+        
+        st.write("Загрузите данные")
+        metabolomic_data_file = st.file_uploader(
+            "Метаболомный профиль пациента (Excel)",
+            type=["xlsx", "xls"],
+            key="metabolomic_data"
+        )
+        
+        # Add checkbox for timing analysis
+        enable_timing = st.checkbox("Включить анализ времени выполнения", value=True)
+        
+        submitted = st.form_submit_button("Сформировать отчет", type="primary")
+
 
     # Инициализация сообщений
     if 'doctor_message' not in st.session_state:
