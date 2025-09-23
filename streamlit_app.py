@@ -145,7 +145,6 @@ def download_pdf_from_dash(session_id):
     try:
         response = requests.get(
             f"{DASH_APP_URL}/download_pdf/{session_id}",
-            timeout=50,
             timeout=90,
         )
 
@@ -180,7 +179,7 @@ def download_pdf_from_dash(session_id):
 def check_dash_health():
     """Проверка доступности Dash приложения"""
     try:
-        response = requests.get(f"{DASH_APP_URL}/health", timeout=5)
+        response = requests.get(f"{DASH_APP_URL}/health", timeout=30)
         return response.status_code == 200
     except:
         return False
