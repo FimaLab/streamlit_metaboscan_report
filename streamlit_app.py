@@ -20,10 +20,7 @@ def time_function(func):
     return wrapper
 
 # Определяем URL Dash приложения в зависимости от окружения
-if os.environ.get('DOCKER_ENV'):
-    DASH_APP_URL = "http://dash:8050"  # для Docker контейнера
-else:
-    DASH_APP_URL = "http://localhost:80"  # для локальной разработки
+DASH_APP_URL = "http://dash:8050"  # для Docker контейнера
 
 
 # Add timing to your existing functions
