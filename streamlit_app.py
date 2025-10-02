@@ -20,7 +20,7 @@ def time_function(func):
     return wrapper
 
 # Определяем URL Dash приложения в зависимости от окружения
-DASH_APP_URL = "http://dash:80"  # для Docker контейнера
+DASH_APP_URL = "https://metaboreport-test-rezvanov.amvera.io/"
 
 
 # Add timing to your existing functions
