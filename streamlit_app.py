@@ -37,6 +37,7 @@ def clean_data_for_json(data):
     
     elif isinstance(data, (np.integer, int)):
         return int(data)
+        
     
     elif isinstance(data, (np.bool_, bool)):
         return bool(data)
